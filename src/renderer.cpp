@@ -64,6 +64,9 @@ void ImageRenderer::initGL(std::string canvasId, int width, int height) {
     
     // 设置当前上下文
     emscripten_webgl_make_context_current(context);
+
+    // 设置视口
+    glViewport(0, 0, width, height);
     
     // 初始化着色器
     initShaders();
@@ -74,30 +77,89 @@ void ImageRenderer::initGL(std::string canvasId, int width, int height) {
     // 初始化纹理
     glGenTextures(1, &textureId);
     glBindTexture(GL_TEXTURE_2D, textureId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 }
 
-void ImageRenderer::loadAndRender(std::string imageData) {
+void ImageRenderer::loadAndRender(std::string imageData, int imageWidth, int imageHeight) {
+    // 计算适配后的尺寸和偏移
+    float scaleX = static_cast<float>(canvasWidth) / imageWidth;
+    float scaleY = static_cast<float>(canvasHeight) / imageHeight;
+    float scale = std::min(scaleX, scaleY);  // 取最小缩放比以适应容器
+    
+    float scaledWidth = imageWidth * scale;
+    float scaledHeight = imageHeight * scale;
+    
+    // 计算归一化坐标（-1到1范围）
+    float normalizedWidth = (scaledWidth / canvasWidth) * 2.0f;
+    float normalizedHeight = (scaledHeight / canvasHeight) * 2.0f;
+    
+    // 计算居中偏移
+    float offsetX = (2.0f - normalizedWidth) / 2.0f;
+    float offsetY = (2.0f - normalizedHeight) / 2.0f;
+    
+    // 更新顶点数据，翻转纹理坐标的Y值
+    float vertices[] = {
+        // 位置                                  // 纹理坐标 (Y从0改为1，从1改为0)
+        -1.0f + offsetX, 1.0f - offsetY,        0.0f, 0.0f,  // 左上
+        -1.0f + offsetX, 1.0f - offsetY - normalizedHeight,  0.0f, 1.0f,  // 左下
+         -1.0f + offsetX + normalizedWidth, 1.0f - offsetY,  1.0f, 0.0f,  // 右上
+         -1.0f + offsetX + normalizedWidth, 1.0f - offsetY - normalizedHeight, 1.0f, 1.0f   // 右下
+    };
+    
+    // 更新顶点缓冲
+    glBindBuffer(GL_ARRAY_BUFFER, vboId);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    // 激活纹理单元0
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, textureId);
     
     // 上传纹理数据
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(
         GL_TEXTURE_2D, 
-        0, 
-        GL_RGBA, 
-        canvasWidth, 
-        canvasHeight, 
-        0, 
-        GL_RGBA, 
-        GL_UNSIGNED_BYTE, 
+        0,                    
+        GL_RGBA,             
+        imageWidth,          // 使用实际图片宽度
+        imageHeight,         // 使用实际图片高度
+        0,                    
+        GL_RGBA,             
+        GL_UNSIGNED_BYTE,    
         imageData.data()
     );
     
-    // 渲染
+    // 检查错误
+    GLenum error = glGetError();
+    if (error != GL_NO_ERROR) {
+        printf("GL error after texture upload: %d\n", error);
+        return;
+    }
+
+    // 清除并渲染
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+    
     glUseProgram(shaderId);
+    
+    GLint texLocation = glGetUniformLocation(shaderId, "uTexture");
+    glUniform1i(texLocation, 0);
+    
+    GLint posAttrib = glGetAttribLocation(shaderId, "position");
+    glEnableVertexAttribArray(posAttrib);
+    glVertexAttribPointer(posAttrib, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), 0);
+
+    GLint texCoordAttrib = glGetAttribLocation(shaderId, "texCoord");
+    glEnableVertexAttribArray(texCoordAttrib);
+    glVertexAttribPointer(texCoordAttrib, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), 
+                         (void*)(2 * sizeof(float)));
+    
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    
+    glDisableVertexAttribArray(posAttrib);
+    glDisableVertexAttribArray(texCoordAttrib);
 }
 
 void ImageRenderer::initShaders() {
@@ -105,17 +167,42 @@ void ImageRenderer::initShaders() {
     GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);
     glCompileShader(vertexShader);
+    
+    // 检查顶点着色器编译状态
+    GLint success;
+    glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        GLchar infoLog[512];
+        glGetShaderInfoLog(vertexShader, 512, NULL, infoLog);
+        printf("Vertex shader compilation failed: %s\n", infoLog);
+    }
 
     // 创建并编译片段着色器
     GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
     glShaderSource(fragmentShader, 1, &fragmentShaderSource, nullptr);
     glCompileShader(fragmentShader);
+    
+    // 检查片段着色器编译状态
+    glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        GLchar infoLog[512];
+        glGetShaderInfoLog(fragmentShader, 512, NULL, infoLog);
+        printf("Fragment shader compilation failed: %s\n", infoLog);
+    }
 
     // 创建着色器程序并链接
     shaderId = glCreateProgram();
     glAttachShader(shaderId, vertexShader);
     glAttachShader(shaderId, fragmentShader);
     glLinkProgram(shaderId);
+    
+    // 检查程序链接状态
+    glGetProgramiv(shaderId, GL_LINK_STATUS, &success);
+    if (!success) {
+        GLchar infoLog[512];
+        glGetProgramInfoLog(shaderId, 512, NULL, infoLog);
+        printf("Shader program linking failed: %s\n", infoLog);
+    }
 
     // 清理着色器对象
     glDeleteShader(vertexShader);
@@ -136,16 +223,6 @@ void ImageRenderer::initBuffers() {
     glGenBuffers(1, &vboId);
     glBindBuffer(GL_ARRAY_BUFFER, vboId);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    // 设置顶点属性
-    GLint posAttrib = glGetAttribLocation(shaderId, "position");
-    glEnableVertexAttribArray(posAttrib);
-    glVertexAttribPointer(posAttrib, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), 0);
-
-    GLint texCoordAttrib = glGetAttribLocation(shaderId, "texCoord");
-    glEnableVertexAttribArray(texCoordAttrib);
-    glVertexAttribPointer(texCoordAttrib, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), 
-                         (void*)(2 * sizeof(float)));
 }
 
 EMSCRIPTEN_BINDINGS(image_renderer_module) {

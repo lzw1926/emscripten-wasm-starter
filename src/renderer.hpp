@@ -12,7 +12,7 @@ class ImageRenderer {
         void initGL(std::string canvasId, int width, int height);
         
         // 加载并渲染图片
-        void loadAndRender(std::string imageData);
+        void loadAndRender(std::string imageData, int imageWidth, int imageHeight);
         
     private:
         // GL相关变量
