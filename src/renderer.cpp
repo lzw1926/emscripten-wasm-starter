@@ -2,7 +2,6 @@
 #include <GLES2/gl2.h>
 #include <emscripten.h>
 #include <emscripten/html5.h>
-
 // 顶点着色器
 const char* vertexShaderSource = R"(
     attribute vec2 position;
@@ -46,6 +45,7 @@ void ImageRenderer::initGL(std::string canvasId, int width, int height) {
     emscripten_webgl_init_context_attributes(&attrs);
     attrs.majorVersion = 2;
     attrs.minorVersion = 0;
+    attrs.explicitSwapControl = 1; // 使 js 执行 transferControlToOffscreen 离屏渲染
     attrs.enableExtensionsByDefault = 1;
     attrs.alpha = 1;
     attrs.depth = 1;
@@ -56,6 +56,7 @@ void ImageRenderer::initGL(std::string canvasId, int width, int height) {
     attrs.powerPreference = EM_WEBGL_POWER_PREFERENCE_DEFAULT;
     attrs.failIfMajorPerformanceCaveat = 0;
     
+
     EMSCRIPTEN_WEBGL_CONTEXT_HANDLE context = emscripten_webgl_create_context(canvasId.c_str(), &attrs);
     if (context <= 0) {
         printf("Failed to create WebGL context!\n");

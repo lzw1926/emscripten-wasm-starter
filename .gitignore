@@ -13,3 +13,4 @@ CMakeUserPresets.json
 
 *.js
 *.wasm
+*.d.ts
